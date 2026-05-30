@@ -12,7 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 import { getTableColumns, getTableName } from "drizzle-orm";
-import { grandPlanNodes } from "./grand_plan_nodes.js";
+import { grandPlanNodes } from "./schema/grand_plan_nodes.js";
 
 describe("grandPlanNodes schema metadata", () => {
   it("has the correct table name", () => {
