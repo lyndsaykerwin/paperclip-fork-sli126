@@ -35,4 +35,12 @@ describe("company routes", () => {
     expect(applyCompanyPrefix("/search?q=hello%20world", "PAP")).toBe("/PAP/search?q=hello%20world");
     expect(toCompanyRelativePath("/PAP/search?q=foo")).toBe("/search?q=foo");
   });
+
+  it("treats /grand-plan as a board route that needs a company prefix", () => {
+    expect(isBoardPathWithoutPrefix("/grand-plan")).toBe(true);
+    // Without this, the hyphenated root is mistaken for a company prefix.
+    expect(extractCompanyPrefixFromPath("/grand-plan")).toBeNull();
+    expect(applyCompanyPrefix("/grand-plan", "SLI")).toBe("/SLI/grand-plan");
+    expect(toCompanyRelativePath("/SLI/grand-plan")).toBe("/grand-plan");
+  });
 });
