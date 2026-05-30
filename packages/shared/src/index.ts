@@ -676,6 +676,10 @@ export type {
   PluginWebhookDeliveryRecord,
   QuotaWindow,
   ProviderQuotaResult,
+  GrandPlanTier,
+  GrandPlanReconcileState,
+  GrandPlanNode,
+  GrandPlanTreeNode,
 } from "./types/index.js";
 export { COMPANY_SEARCH_SCOPES } from "./types/index.js";
 export {

@@ -463,3 +463,9 @@ export type {
   PluginDatabaseNamespaceMode,
   PluginDatabaseNamespaceStatus,
 } from "./plugin.js";
+export type {
+  GrandPlanTier,
+  GrandPlanReconcileState,
+  GrandPlanNode,
+  GrandPlanTreeNode,
+} from "./grand-plan.js";
