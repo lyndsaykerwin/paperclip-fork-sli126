@@ -3,19 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { documentRevisions, documents, issueDocuments, issues } from "@paperclipai/db";
 import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
-import {
-  runPrdChangeCascade,
-  type PrdCascadeDeps,
-} from "./grand-plan-prd-cascade.js";
-
-/**
- * Optional dependencies for the document service. B2 injects a heartbeat so the
- * PRD-change cascade (run after a doc revision commits) can wake the company CEO.
- * Optional, so existing `documentService(db)` callers keep working unchanged.
- */
-export interface DocumentServiceDeps {
-  heartbeat?: PrdCascadeDeps["heartbeat"];
-}
+import { runPrdChangeCascade } from "./grand-plan-prd-cascade.js";
 
 function normalizeDocumentKey(key: string) {
   const normalized = key.trim().toLowerCase();
@@ -118,7 +106,7 @@ const issueDocumentSelect = {
   updatedAt: documents.updatedAt,
 };
 
-export function documentService(db: Db, deps: DocumentServiceDeps = {}) {
+export function documentService(db: Db) {
   const filterSystemDocuments = <T extends { key: string }>(rows: T[], includeSystem: boolean) =>
     includeSystem ? rows : rows.filter((row) => !isSystemIssueDocumentKey(row.key));
 
@@ -528,11 +516,7 @@ export function documentService(db: Db, deps: DocumentServiceDeps = {}) {
           // document UPDATE. Never throws (the cascade swallows + warns), so a
           // cascade failure can never fail an already-committed document save.
           if (prdCascadeInput) {
-            await runPrdChangeCascade(
-              db,
-              { heartbeat: deps.heartbeat },
-              prdCascadeInput,
-            );
+            await runPrdChangeCascade(db, {}, prdCascadeInput);
           }
 
           return txResult;

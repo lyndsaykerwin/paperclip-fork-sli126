@@ -20,31 +20,13 @@
  */
 import { and, eq, isNull, sql } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, approvals, grandPlanNodes, issues } from "@paperclipai/db";
+import { approvals, grandPlanNodes, issues } from "@paperclipai/db";
 import { logger } from "../middleware/logger.js";
 import { approvalService as makeApprovalService } from "./approvals.js";
 import { grandPlanService as makeGrandPlanService } from "./grand-plan.js";
 import { diffPrdClauses } from "./grand-plan-prd-clauses.js";
 
-/** Heartbeat wake primitive — same shape used by the B1 soft gate. */
-export interface GrandPlanWakeDeps {
-  wakeup: (
-    agentId: string,
-    opts: {
-      source?: "timer" | "assignment" | "on_demand" | "automation";
-      triggerDetail?: "manual" | "ping" | "callback" | "system";
-      reason?: string | null;
-      payload?: Record<string, unknown> | null;
-      requestedByActorType?: "user" | "agent" | "system";
-      requestedByActorId?: string | null;
-      contextSnapshot?: Record<string, unknown>;
-    },
-  ) => Promise<unknown>;
-}
-
 export interface PrdCascadeDeps {
-  /** Injected so a failing/missing wake never breaks the save. Optional. */
-  heartbeat?: GrandPlanWakeDeps;
   /** Override the approval service (used by tests). Defaults to one over `db`. */
   approvalService?: ReturnType<typeof makeApprovalService>;
   /** Override the grand plan service. Defaults to one over `db`. */
@@ -81,38 +63,12 @@ async function findDocRoot(db: Db, documentId: string) {
 }
 
 /**
- * Wake the company's CEO agent (role='ceo') so it can author the actual ripple
- * work. Best-effort: a missing CEO or a failing wake only warns.
- */
-async function wakeCeo(
-  db: Db,
-  deps: PrdCascadeDeps,
-  companyId: string,
-  reason: string,
-  payload: Record<string, unknown>,
-): Promise<void> {
-  if (!deps.heartbeat) return;
-  const ceo = await db
-    .select({ id: agents.id })
-    .from(agents)
-    .where(and(eq(agents.companyId, companyId), eq(agents.role, "ceo")))
-    .limit(1)
-    .then((rows) => rows[0] ?? null);
-  if (!ceo) return;
-  await deps.heartbeat.wakeup(ceo.id, {
-    source: "automation",
-    triggerDetail: "system",
-    reason,
-    payload,
-    requestedByActorType: "system",
-    requestedByActorId: null,
-    contextSnapshot: { source: "documents.upsert.grand_plan_reconcile", ...payload },
-  });
-}
-
-/**
  * Part A — detection + flag + raise approval. Runs AFTER the document-save
  * transaction commits. Never throws.
+ *
+ * NOTE: the CEO is NOT woken here. The raised approval goes to the human owner
+ * for sign-off; only once it is APPROVED does the CEO get woken to author the
+ * ripple (see `applyGrandPlanReconcile` in approvals.ts).
  */
 export async function runPrdChangeCascade(
   db: Db,
@@ -199,15 +155,6 @@ export async function runPrdChangeCascade(
           affectedClauseNodeIds,
           affectedIssueCount,
         },
-      });
-
-      // Wake CEO so it starts authoring the ripple (best-effort).
-      await wakeCeo(db, deps, root.companyId, "grand_plan_reconcile", {
-        documentId: input.documentId,
-        added,
-        changed,
-        removed,
-        mutation: "prd_revised",
       });
     }
   } catch (err) {

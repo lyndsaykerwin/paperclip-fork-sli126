@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
 import {
   agents,
@@ -37,19 +37,11 @@ describeEmbeddedPostgres("PRD-change cascade (B2)", () => {
   let companyId: string;
   let ceoAgentId: string;
 
-  const wakeup = vi.fn(
-    async (_agentId: string, _opts: Record<string, unknown>): Promise<unknown> => undefined,
-  );
-
   beforeAll(async () => {
     tempDb = await startEmbeddedPostgresTestDatabase("paperclip-grand-plan-prd-cascade-");
     db = createDb(tempDb.connectionString);
     gp = grandPlanService(db);
   }, 20_000);
-
-  beforeEach(() => {
-    wakeup.mockClear();
-  });
 
   afterEach(async () => {
     await db.delete(issues);
@@ -183,7 +175,7 @@ describeEmbeddedPostgres("PRD-change cascade (B2)", () => {
     const newBody = "## PRD-story-1\nAlpha CHANGED.\n## PRD-story-2\nBeta.";
     const toRev = await addRevision(documentId, newBody, 2);
 
-    await runPrdChangeCascade(db, { heartbeat: { wakeup } }, {
+    await runPrdChangeCascade(db, {}, {
       documentId,
       companyId,
       oldBody,
@@ -221,7 +213,7 @@ describeEmbeddedPostgres("PRD-change cascade (B2)", () => {
     const newBody = "## PRD-story-1\nAlpha CHANGED.";
     const toRev = await addRevision(documentId, newBody, 2);
 
-    await runPrdChangeCascade(db, { heartbeat: { wakeup } }, {
+    await runPrdChangeCascade(db, {}, {
       documentId,
       companyId,
       oldBody,
@@ -231,7 +223,6 @@ describeEmbeddedPostgres("PRD-change cascade (B2)", () => {
     });
 
     expect(await reconcileApprovalsFor(documentId)).toHaveLength(0);
-    expect(wakeup).not.toHaveBeenCalled();
   });
 
   it("is idempotent: a second edit while a pending reconcile exists does not double-raise", async () => {
@@ -242,7 +233,7 @@ describeEmbeddedPostgres("PRD-change cascade (B2)", () => {
 
     const body2 = "## PRD-story-1\nAlpha v2.";
     const rev2 = await addRevision(documentId, body2, 2);
-    await runPrdChangeCascade(db, { heartbeat: { wakeup } }, {
+    await runPrdChangeCascade(db, {}, {
       documentId,
       companyId,
       oldBody,
@@ -253,7 +244,7 @@ describeEmbeddedPostgres("PRD-change cascade (B2)", () => {
 
     const body3 = "## PRD-story-1\nAlpha v3.";
     const rev3 = await addRevision(documentId, body3, 3);
-    await runPrdChangeCascade(db, { heartbeat: { wakeup } }, {
+    await runPrdChangeCascade(db, {}, {
       documentId,
       companyId,
       oldBody: body2,
@@ -275,7 +266,7 @@ describeEmbeddedPostgres("PRD-change cascade (B2)", () => {
     const newBody = "## PRD-story-1\nAlpha.\n## PRD-story-3\nGamma.";
     const toRev = await addRevision(documentId, newBody, 2);
 
-    await runPrdChangeCascade(db, { heartbeat: { wakeup } }, {
+    await runPrdChangeCascade(db, {}, {
       documentId,
       companyId,
       oldBody,
@@ -315,7 +306,7 @@ describeEmbeddedPostgres("PRD-change cascade (B2)", () => {
     await expect(
       runPrdChangeCascade(
         db,
-        { heartbeat: { wakeup }, approvalService: brokenApprovals },
+        { approvalService: brokenApprovals },
         {
           documentId,
           companyId,
