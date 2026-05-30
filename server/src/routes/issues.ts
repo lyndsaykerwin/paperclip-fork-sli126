@@ -850,11 +850,13 @@ export function issueRoutes(
   } = {},
 ) {
   const router = Router();
-  const svc = issueService(db);
   const access = accessService(db);
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,
   });
+  // Pass the heartbeat to the issue service so the Grand Plan soft gate can wake
+  // the company CEO when an untethered issue is created.
+  const svc = issueService(db, { heartbeat: { wakeup: heartbeat.wakeup } });
   const feedback = feedbackService(db);
   const companiesSvc = companyService(db);
   let searchSvc = opts.searchService ?? null;

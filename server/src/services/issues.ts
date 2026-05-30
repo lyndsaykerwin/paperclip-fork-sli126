@@ -82,6 +82,8 @@ import {
 } from "./recovery/origins.js";
 import { classifyIssueGraphLiveness, type IssueLivenessFinding } from "./recovery/issue-graph-liveness.js";
 import { recomputeGrandPlanRollupForNodeAndAncestors } from "./grand-plan-rollup.js";
+import { grandPlanService } from "./grand-plan.js";
+import { approvalService } from "./approvals.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -2839,9 +2841,105 @@ async function countBlockedInboxIssues(dbOrTx: any, companyId: string, filters?:
   }, 0);
 }
 
-export function issueService(db: Db) {
+export interface IssueServiceGrandPlanWakeDeps {
+  /**
+   * Heartbeat dependency used to wake the company CEO when an untethered issue
+   * is created in a company that has a Grand Plan. Mirrors the assignment-wake
+   * heartbeat shape; optional so existing `issueService(db)` callers are unaffected.
+   */
+  wakeup: (
+    agentId: string,
+    opts: {
+      source?: "timer" | "assignment" | "on_demand" | "automation";
+      triggerDetail?: "manual" | "ping" | "callback" | "system";
+      reason?: string | null;
+      payload?: Record<string, unknown> | null;
+      requestedByActorType?: "user" | "agent" | "system";
+      requestedByActorId?: string | null;
+      contextSnapshot?: Record<string, unknown>;
+    },
+  ) => Promise<unknown>;
+}
+
+export interface IssueServiceDeps {
+  heartbeat?: IssueServiceGrandPlanWakeDeps;
+}
+
+export function issueService(db: Db, deps: IssueServiceDeps = {}) {
   const instanceSettings = instanceSettingsService(db);
   const treeControlSvc = issueTreeControlService(db);
+  const grandPlan = grandPlanService(db);
+  const approvalSvc = approvalService(db);
+
+  /**
+   * Soft gate for the Grand Plan governance feature. When a freshly-created
+   * issue has no Grand Plan clause but the company HAS a Grand Plan, surface the
+   * issue to the CEO so it can be routed — without ever blocking creation:
+   *   1. Raise a `grand_plan_tether` approval referencing the issue (idempotent:
+   *      never a second pending one for the same issue).
+   *   2. Wake the company's CEO agent via the injected heartbeat dependency,
+   *      mirroring "create an issue and tag the CEO".
+   * Guard: if the company has no Grand Plan root, do nothing (zero behaviour
+   * change for every non-dogfooding company). Any failure here only warns —
+   * the issue is already committed.
+   */
+  async function raiseUntetheredIssueToCeo(
+    companyId: string,
+    issue: { id: string; title: string; grandPlanNodeId: string | null },
+  ): Promise<void> {
+    try {
+      if (issue.grandPlanNodeId) return;
+      const root = await grandPlan.getRoot(companyId, null);
+      if (!root) return;
+
+      // Idempotency: skip if a pending grand_plan_tether approval already
+      // references this issue.
+      const existing = await db
+        .select({ id: approvals.id })
+        .from(approvals)
+        .where(
+          and(
+            eq(approvals.companyId, companyId),
+            eq(approvals.type, "grand_plan_tether"),
+            eq(approvals.status, "pending"),
+            sql`${approvals.payload}->>'issueId' = ${issue.id}`,
+          ),
+        )
+        .limit(1)
+        .then((rows) => rows[0] ?? null);
+      if (!existing) {
+        await approvalSvc.create(companyId, {
+          type: "grand_plan_tether",
+          status: "pending",
+          payload: { issueId: issue.id, issueTitle: issue.title },
+        });
+      }
+
+      // Wake the company CEO (role='ceo') so the routing request gets attention,
+      // exactly like assignment wakeups do for assignees.
+      if (deps.heartbeat) {
+        const ceo = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(and(eq(agents.companyId, companyId), eq(agents.role, "ceo")))
+          .limit(1)
+          .then((rows) => rows[0] ?? null);
+        if (ceo) {
+          await deps.heartbeat.wakeup(ceo.id, {
+            source: "automation",
+            triggerDetail: "system",
+            reason: "grand_plan_tether",
+            payload: { issueId: issue.id, mutation: "create" },
+            requestedByActorType: "system",
+            requestedByActorId: null,
+            contextSnapshot: { issueId: issue.id, source: "issue.create.grand_plan_tether" },
+          });
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, issueId: issue.id }, "failed to raise untethered issue to CEO (grand plan soft gate)");
+    }
+  }
 
   async function getIssueByUuid(id: string) {
     const row = await db
@@ -4128,6 +4226,7 @@ export function issueService(db: Db) {
         parentId: parent.id,
         projectId: issueData.projectId ?? parent.projectId,
         goalId: issueData.goalId ?? parent.goalId,
+        grandPlanNodeId: issueData.grandPlanNodeId ?? parent.grandPlanNodeId,
         requestDepth: clampIssueRequestDepth(
           Math.max(clampIssueRequestDepth(parent.requestDepth) + 1, issueData.requestDepth ?? 0),
         ),
@@ -4182,7 +4281,24 @@ export function issueService(db: Db) {
       if (data.status === "in_progress" && !data.assigneeAgentId && !data.assigneeUserId) {
         throw unprocessable("in_progress issues require an assignee");
       }
-      return db.transaction(async (tx) => {
+      // Grand Plan tethering: validate an explicit clause, otherwise inherit the
+      // parent's clause when creating a child via the plain create path.
+      if (issueData.grandPlanNodeId) {
+        const node = await grandPlan.getById(issueData.grandPlanNodeId);
+        if (!node || node.companyId !== companyId) {
+          throw unprocessable("grandPlanNodeId does not reference a Grand Plan clause for this company");
+        }
+      } else if (issueData.parentId) {
+        const parentClause = await db
+          .select({ grandPlanNodeId: issues.grandPlanNodeId })
+          .from(issues)
+          .where(and(eq(issues.id, issueData.parentId), eq(issues.companyId, companyId)))
+          .then((rows) => rows[0] ?? null);
+        if (parentClause?.grandPlanNodeId) {
+          issueData.grandPlanNodeId = parentClause.grandPlanNodeId;
+        }
+      }
+      const createdIssue = await db.transaction(async (tx) => {
         const defaultCompanyGoal = await getDefaultCompanyGoal(tx, companyId);
         const projectGoalId = await getProjectDefaultGoalId(tx, companyId, issueData.projectId);
         let projectWorkspaceId = issueData.projectWorkspaceId ?? null;
@@ -4385,6 +4501,11 @@ export function issueService(db: Db) {
         const [enriched] = await withIssueLabels(tx, [issue]);
         return enriched;
       });
+      // Soft gate (post-commit, never blocks creation): if the issue ended up
+      // with no Grand Plan clause AND the company has a Grand Plan, surface it
+      // to the CEO. Mirrors the assignment-wake try/catch — failures only warn.
+      await raiseUntetheredIssueToCeo(companyId, createdIssue);
+      return createdIssue;
     },
 
     update: async (
