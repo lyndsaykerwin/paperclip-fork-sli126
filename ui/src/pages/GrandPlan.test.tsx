@@ -103,6 +103,14 @@ const VIEW: GrandPlanView = {
         parentId: "root",
         uncovered: true,
       }),
+      // Clause 3 flagged for reconcile (PRD prose changed downstream)
+      makeNode({
+        id: "clause-3",
+        tier: "prd",
+        title: "Clause 3 needs reconcile",
+        parentId: "root",
+        reconcileState: "parent_changed",
+      }),
     ],
   }),
   driftIssues: [
@@ -187,6 +195,28 @@ describe("GrandPlan page", () => {
 
     const flag = container.querySelector('[data-testid="uncovered-flag"]');
     expect(flag?.textContent).toContain("no spec/plan yet");
+
+    await act(async () => root.unmount());
+  });
+
+  it("shows the reconcile badge on a clause flagged parent_changed", async () => {
+    mockGrandPlanApi.view.mockResolvedValue(VIEW);
+    const root = await render();
+
+    const flag = container.querySelector('[data-testid="reconcile-flag"]');
+    expect(flag).not.toBeNull();
+    expect(flag?.textContent).toContain("needs reconcile");
+
+    await act(async () => root.unmount());
+  });
+
+  it("does not show the reconcile badge on a current clause", async () => {
+    mockGrandPlanApi.view.mockResolvedValue(VIEW);
+    const root = await render();
+
+    // clause-1 is reconcileState 'current' (default) -> no badge inside its row.
+    const clause1Row = container.querySelector('[data-testid="node-clause-1"]');
+    expect(clause1Row?.querySelector('[data-testid="reconcile-flag"]')).toBeNull();
 
     await act(async () => root.unmount());
   });

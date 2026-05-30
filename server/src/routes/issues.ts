@@ -873,7 +873,9 @@ export function issueRoutes(
   const recoveryActionsSvc = issueRecoveryActionService(db);
   const executionWorkspacesSvc = executionWorkspaceServiceDirect(db);
   const workProductsSvc = workProductService(db);
-  const documentsSvc = documentService(db);
+  // Pass the heartbeat so the Grand Plan PRD-change cascade (run after a PRD
+  // document revision commits) can wake the company CEO to author the ripple.
+  const documentsSvc = documentService(db, { heartbeat: { wakeup: heartbeat.wakeup } });
   const documentAnnotationsSvc = documentAnnotationService(db);
   const issueReferencesSvc = issueReferenceService(db);
   const issueThreadInteractionsSvc = issueThreadInteractionService(db);

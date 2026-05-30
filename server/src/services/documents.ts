@@ -3,6 +3,19 @@ import type { Db } from "@paperclipai/db";
 import { documentRevisions, documents, issueDocuments, issues } from "@paperclipai/db";
 import { isSystemIssueDocumentKey, issueDocumentKeySchema } from "@paperclipai/shared";
 import { conflict, notFound, unprocessable } from "../errors.js";
+import {
+  runPrdChangeCascade,
+  type PrdCascadeDeps,
+} from "./grand-plan-prd-cascade.js";
+
+/**
+ * Optional dependencies for the document service. B2 injects a heartbeat so the
+ * PRD-change cascade (run after a doc revision commits) can wake the company CEO.
+ * Optional, so existing `documentService(db)` callers keep working unchanged.
+ */
+export interface DocumentServiceDeps {
+  heartbeat?: PrdCascadeDeps["heartbeat"];
+}
 
 function normalizeDocumentKey(key: string) {
   const normalized = key.trim().toLowerCase();
@@ -105,7 +118,7 @@ const issueDocumentSelect = {
   updatedAt: documents.updatedAt,
 };
 
-export function documentService(db: Db) {
+export function documentService(db: Db, deps: DocumentServiceDeps = {}) {
   const filterSystemDocuments = <T extends { key: string }>(rows: T[], includeSystem: boolean) =>
     includeSystem ? rows : rows.filter((row) => !isSystemIssueDocumentKey(row.key));
 
@@ -213,9 +226,19 @@ export function documentService(db: Db) {
       if (!issue) throw notFound("Issue not found");
 
       const maxAttempts = input.lockedDocumentStrategy === "create_new_document" ? 3 : 1;
+      // Captured inside the UPDATE branch so the Grand Plan PRD-change cascade can
+      // run AFTER the transaction commits (mirrors B1's post-commit side-effect).
+      let prdCascadeInput: {
+        documentId: string;
+        companyId: string;
+        oldBody: string;
+        newBody: string;
+        fromRevisionId: string | null;
+        toRevisionId: string | null;
+      } | null = null;
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
         try {
-          return await db.transaction(async (tx) => {
+          const txResult = await db.transaction(async (tx) => {
           const now = new Date();
           const existing = await tx
             .select({
@@ -388,6 +411,19 @@ export function documentService(db: Db) {
               .set({ updatedAt: now })
               .where(eq(issueDocuments.documentId, existing.id));
 
+            // Capture the OLD vs NEW body for the Grand Plan PRD-change cascade,
+            // to run AFTER this transaction commits. `existing.latestBody` is the
+            // pre-update body; `input.body` is the new body; `existing.latestRevisionId`
+            // is the old revision and `revision.id` is the freshly-inserted one.
+            prdCascadeInput = {
+              documentId: existing.id,
+              companyId: issue.companyId,
+              oldBody: existing.latestBody,
+              newBody: input.body,
+              fromRevisionId: existing.latestRevisionId ?? null,
+              toRevisionId: revision.id,
+            };
+
             return {
               created: false as const,
               document: {
@@ -487,6 +523,19 @@ export function documentService(db: Db) {
             },
           };
           });
+
+          // Post-commit: run the Grand Plan PRD-change cascade for an in-place
+          // document UPDATE. Never throws (the cascade swallows + warns), so a
+          // cascade failure can never fail an already-committed document save.
+          if (prdCascadeInput) {
+            await runPrdChangeCascade(
+              db,
+              { heartbeat: deps.heartbeat },
+              prdCascadeInput,
+            );
+          }
+
+          return txResult;
         } catch (error) {
           if (isUniqueViolation(error)) {
             if (input.lockedDocumentStrategy === "create_new_document" && attempt < maxAttempts - 1) {

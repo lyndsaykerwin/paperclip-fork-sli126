@@ -32,10 +32,12 @@ export function approvalRoutes(
   options: { pluginWorkerManager?: PluginWorkerManager } = {},
 ) {
   const router = Router();
-  const svc = approvalService(db);
   const heartbeat = heartbeatService(db, {
     pluginWorkerManager: options.pluginWorkerManager,
   });
+  // Pass the heartbeat so an approved grand_plan_reconcile wakes the company CEO
+  // to author the actual ripple work (Grand Plan B2).
+  const svc = approvalService(db, { heartbeat: { wakeup: heartbeat.wakeup } });
   const issueApprovalsSvc = issueApprovalService(db);
   const secretsSvc = secretService(db);
   const strictSecretsMode = process.env.PAPERCLIP_SECRETS_STRICT_MODE === "true";
