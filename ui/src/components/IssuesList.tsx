@@ -975,6 +975,7 @@ export function IssuesList({
       enableRoutineVisibilityFilter,
       liveIssueIds,
       issueFilterWorkspaceContext,
+      session?.user?.name ?? session?.user?.email ?? null,
     );
     return sortIssues(filteredByControls, viewState);
   }, [

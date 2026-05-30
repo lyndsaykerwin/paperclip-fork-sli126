@@ -143,6 +143,8 @@ export function Issues() {
       participantAgentId,
       workspaceId: workspaceIdFilter,
       includeRoutineExecutions: true,
+      includePendingBoardInteraction: true,
+      includeLastCommentHint: true,
       limit: issuePageSize,
       offset: pageParam,
       sortField: "updated",

@@ -189,6 +189,8 @@ export type {
   IssueBlockedInboxReason,
   IssueBlockedInboxSeverity,
   IssueBlockedInboxState,
+  IssuePendingBoardInteractionSummary,
+  IssueLastCommentHint,
   IssueProductivityReview,
   IssueProductivityReviewTrigger,
   IssueRecoveryAction,

@@ -35,9 +35,12 @@ import type {
   IssueBlockerAttention,
   IssueBlockedInboxAttention,
   IssueBlockedInboxIssueRef,
+  IssuePendingBoardInteractionSummary,
+  IssueLastCommentHint,
   IssueProductivityReview,
   IssueProductivityReviewTrigger,
   IssueRelationIssueSummary,
+  IssueThreadInteractionKind,
   SuccessfulRunHandoffState,
 } from "@paperclipai/shared";
 import {
@@ -236,6 +239,8 @@ export interface IssueFilters {
   includePluginOperations?: boolean;
   includeBlockedBy?: boolean;
   includeBlockedInboxAttention?: boolean;
+  includePendingBoardInteraction?: boolean;
+  includeLastCommentHint?: boolean;
   q?: string;
   limit?: number;
   offset?: number;
@@ -2128,6 +2133,81 @@ function compareBlockedInboxRows(
   return right.id.localeCompare(left.id);
 }
 
+const PENDING_BOARD_INTERACTION_KINDS: IssueThreadInteractionKind[] = [
+  "ask_user_questions",
+  "request_confirmation",
+  "suggest_tasks",
+];
+
+const LAST_COMMENT_HINT_BODY_MAX_CHARS = 600;
+
+async function listIssueLastCommentHintMap(
+  dbOrTx: any,
+  companyId: string,
+  issueIds: string[],
+): Promise<Map<string, IssueLastCommentHint>> {
+  const result = new Map<string, IssueLastCommentHint>();
+  if (issueIds.length === 0) return result;
+  for (const chunk of chunkList(issueIds, ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE)) {
+    const rows: Array<{ issueId: string; body: string; authorAgentId: string | null; authorUserId: string | null; createdAt: Date }> = await dbOrTx
+      .selectDistinctOn([issueComments.issueId], {
+        issueId: issueComments.issueId,
+        body: issueComments.body,
+        authorAgentId: issueComments.authorAgentId,
+        authorUserId: issueComments.authorUserId,
+        createdAt: issueComments.createdAt,
+      })
+      .from(issueComments)
+      .where(and(
+        eq(issueComments.companyId, companyId),
+        inArray(issueComments.issueId, chunk),
+      ))
+      .orderBy(asc(issueComments.issueId), desc(issueComments.createdAt));
+    for (const row of rows) {
+      result.set(row.issueId, {
+        body: row.body.length > LAST_COMMENT_HINT_BODY_MAX_CHARS
+          ? row.body.slice(0, LAST_COMMENT_HINT_BODY_MAX_CHARS)
+          : row.body,
+        authorKind: row.authorAgentId ? "agent" : "user",
+        authorAgentId: row.authorAgentId ?? null,
+        createdAt: row.createdAt,
+      });
+    }
+  }
+  return result;
+}
+
+async function listIssuePendingBoardInteractionMap(
+  dbOrTx: any,
+  companyId: string,
+  issueIds: string[],
+): Promise<Map<string, IssuePendingBoardInteractionSummary>> {
+  const result = new Map<string, IssuePendingBoardInteractionSummary>();
+  if (issueIds.length === 0) return result;
+  for (const chunk of chunkList(issueIds, ISSUE_LIST_RELATED_QUERY_CHUNK_SIZE)) {
+    const rows: Array<{ id: string; issueId: string; kind: IssueThreadInteractionKind; createdAt: Date }> = await dbOrTx
+      .select({
+        id: issueThreadInteractions.id,
+        issueId: issueThreadInteractions.issueId,
+        kind: issueThreadInteractions.kind,
+        createdAt: issueThreadInteractions.createdAt,
+      })
+      .from(issueThreadInteractions)
+      .where(and(
+        eq(issueThreadInteractions.companyId, companyId),
+        inArray(issueThreadInteractions.status, [...BLOCKED_INBOX_PENDING_INTERACTION_STATUSES]),
+        inArray(issueThreadInteractions.kind, PENDING_BOARD_INTERACTION_KINDS),
+        inArray(issueThreadInteractions.issueId, chunk),
+      ))
+      .orderBy(asc(issueThreadInteractions.createdAt));
+    for (const row of rows) {
+      if (result.has(row.issueId)) continue;
+      result.set(row.issueId, { id: row.id, kind: row.kind, createdAt: row.createdAt });
+    }
+  }
+  return result;
+}
+
 async function listIssueBlockedInboxAttentionMap(
   dbOrTx: any,
   companyId: string,
@@ -3460,6 +3540,8 @@ export function issueService(db: Db) {
       const contextUserId = unreadForUserId ?? touchedByUserId ?? inboxArchivedByUserId;
       const includeBlockedBy = filters?.includeBlockedBy === true;
       const includeBlockedInboxAttention = filters?.includeBlockedInboxAttention === true;
+      const includePendingBoardInteraction = filters?.includePendingBoardInteraction === true;
+      const includeLastCommentHint = filters?.includeLastCommentHint === true;
       const rawSearch = filters?.q?.trim() ?? "";
       const hasSearch = rawSearch.length > 0;
       const escapedSearch = hasSearch ? escapeLikePattern(rawSearch) : "";
@@ -3615,12 +3697,20 @@ export function issueService(db: Db) {
         blockerAttentionByIssueId,
         productivityReviewByIssueId,
         blockedInboxAttentionByIssueId,
+        pendingBoardInteractionByIssueId,
+        lastCommentHintByIssueId,
       ] = await Promise.all([
         listIssueBlockerAttentionMap(db, companyId, withRuns),
         listIssueProductivityReviewMap(db, companyId, issueIds),
         includeBlockedInboxAttention
           ? listIssueBlockedInboxAttentionMap(db, companyId, withRuns)
           : Promise.resolve(new Map<string, IssueBlockedInboxAttention>()),
+        includePendingBoardInteraction
+          ? listIssuePendingBoardInteractionMap(db, companyId, issueIds)
+          : Promise.resolve(new Map<string, IssuePendingBoardInteractionSummary>()),
+        includeLastCommentHint
+          ? listIssueLastCommentHintMap(db, companyId, issueIds)
+          : Promise.resolve(new Map<string, IssueLastCommentHint>()),
       ]);
 
       if (!contextUserId) {
@@ -3637,6 +3727,8 @@ export function issueService(db: Db) {
             lastActivityAt,
             ...(blockerAttentionByIssueId.has(row.id) ? { blockerAttention: blockerAttentionByIssueId.get(row.id) } : {}),
             ...(includeBlockedInboxAttention ? { blockedInboxAttention: blockedInboxAttentionByIssueId.get(row.id) ?? null } : {}),
+            ...(includePendingBoardInteraction ? { pendingBoardInteraction: pendingBoardInteractionByIssueId.get(row.id) ?? null } : {}),
+            ...(includeLastCommentHint ? { lastCommentHint: lastCommentHintByIssueId.get(row.id) ?? null } : {}),
             ...(productivityReviewByIssueId.has(row.id)
               ? { productivityReview: productivityReviewByIssueId.get(row.id) }
               : {}),
@@ -3659,6 +3751,8 @@ export function issueService(db: Db) {
           lastActivityAt,
           ...(blockerAttentionByIssueId.has(row.id) ? { blockerAttention: blockerAttentionByIssueId.get(row.id) } : {}),
           ...(includeBlockedInboxAttention ? { blockedInboxAttention: blockedInboxAttentionByIssueId.get(row.id) ?? null } : {}),
+          ...(includePendingBoardInteraction ? { pendingBoardInteraction: pendingBoardInteractionByIssueId.get(row.id) ?? null } : {}),
+          ...(includeLastCommentHint ? { lastCommentHint: lastCommentHintByIssueId.get(row.id) ?? null } : {}),
           ...(productivityReviewByIssueId.has(row.id)
             ? { productivityReview: productivityReviewByIssueId.get(row.id) }
             : {}),
