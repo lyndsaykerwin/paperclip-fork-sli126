@@ -18,7 +18,7 @@ export const grandPlanNodes = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     companyId: uuid("company_id").notNull().references(() => companies.id),
-    projectId: uuid("project_id").references(() => projects.id),
+    projectId: uuid("project_id").references(() => projects.id, { onDelete: "set null" }),
     parentId: uuid("parent_id").references((): AnyPgColumn => grandPlanNodes.id),
     tier: text("tier").notNull(),
     title: text("title").notNull(),
@@ -26,13 +26,13 @@ export const grandPlanNodes = pgTable(
     sourceRevisionId: uuid("source_revision_id").references(() => documentRevisions.id, { onDelete: "set null" }),
     reconcileState: text("reconcile_state").notNull().default("current"),
     rollupPercent: integer("rollup_percent").notNull().default(0),
-    ownerAgentId: uuid("owner_agent_id").references(() => agents.id),
+    ownerAgentId: uuid("owner_agent_id").references(() => agents.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
-    companyIdx: index("grand_plan_nodes_company_id_idx").on(table.companyId),
-    parentIdx: index("grand_plan_nodes_parent_id_idx").on(table.parentId),
-    projectIdx: index("grand_plan_nodes_project_id_idx").on(table.projectId),
+    companyIdx: index("grand_plan_nodes_company_idx").on(table.companyId),
+    parentIdx: index("grand_plan_nodes_parent_idx").on(table.parentId),
+    projectIdx: index("grand_plan_nodes_project_idx").on(table.projectId),
   }),
 );
