@@ -29,6 +29,7 @@ vi.mock("@/lib/router", () => ({
       {children}
     </a>
   ),
+  useMatch: () => null,
 }));
 
 vi.mock("../context/DialogContext", () => ({
