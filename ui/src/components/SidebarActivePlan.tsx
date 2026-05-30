@@ -1,15 +1,9 @@
 import { FileText } from "lucide-react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { NavLink } from "@/lib/router";
 import { SIDEBAR_SCROLL_RESET_STATE } from "../lib/navigation-scroll";
 import { cn } from "../lib/utils";
-import { issuesApi } from "../api/issues";
-import { queryKeys } from "../lib/queryKeys";
-import { useActiveIssueId } from "../hooks/useActiveIssueId";
+import { useCompany } from "../context/CompanyContext";
 import { useSidebar } from "../context/SidebarContext";
-import { getIssueDetailQueryOptions } from "../lib/issueDetailCache";
-
-const PLAN_DOCUMENT_KEY = "plan";
 
 function MutedEntry({ label }: { label: string }) {
   return (
@@ -24,44 +18,17 @@ function MutedEntry({ label }: { label: string }) {
 }
 
 export function SidebarActivePlan() {
-  const activeIssueId = useActiveIssueId();
-  const queryClient = useQueryClient();
+  const { selectedCompanyId } = useCompany();
   const { isMobile, setSidebarOpen } = useSidebar();
 
-  const documentsQuery = useQuery({
-    queryKey: activeIssueId
-      ? queryKeys.issues.documents(activeIssueId)
-      : ["issues", "documents", "__none__"],
-    queryFn: () => issuesApi.listDocuments(activeIssueId!),
-    enabled: !!activeIssueId,
-    staleTime: 5_000,
-  });
-
-  const issueDetailQuery = useQuery({
-    ...getIssueDetailQueryOptions(queryClient, activeIssueId ?? "__none__"),
-    enabled: !!activeIssueId,
-    staleTime: 5_000,
-  });
-
-  if (!activeIssueId) {
-    return <MutedEntry label="No active plan" />;
-  }
-
-  const planDoc = documentsQuery.data?.find((doc) => doc.key === PLAN_DOCUMENT_KEY);
-  const legacyPlan = issueDetailQuery.data?.legacyPlanDocument ?? null;
-  const hasPlan = Boolean(planDoc) || Boolean(legacyPlan);
-
-  if (documentsQuery.isLoading && issueDetailQuery.isLoading && !documentsQuery.data && !issueDetailQuery.data) {
+  // Graceful muted state until a company is selected.
+  if (!selectedCompanyId) {
     return <MutedEntry label="Active plan" />;
-  }
-
-  if (!hasPlan) {
-    return <MutedEntry label="No active plan" />;
   }
 
   return (
     <NavLink
-      to={`/issues/${activeIssueId}#document-plan`}
+      to="/grand-plan"
       state={SIDEBAR_SCROLL_RESET_STATE}
       onClick={() => {
         if (isMobile) setSidebarOpen(false);

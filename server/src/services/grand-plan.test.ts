@@ -7,6 +7,7 @@ import {
   grandPlanNodes,
   documents,
   documentRevisions,
+  issues,
 } from "@paperclipai/db";
 import {
   getEmbeddedPostgresTestSupport,
@@ -38,7 +39,9 @@ describeEmbeddedPostgres("grandPlanService", () => {
   }, 20_000);
 
   afterEach(async () => {
-    // Delete in FK-safe order: grand_plan_nodes refs companies/projects/documents/revisions
+    // Delete in FK-safe order: issues ref grand_plan_nodes; grand_plan_nodes
+    // ref companies/projects/documents/revisions.
+    await db.delete(issues);
     await db.delete(grandPlanNodes);
     await db.delete(documentRevisions);
     await db.delete(documents);
@@ -229,5 +232,133 @@ describeEmbeddedPostgres("grandPlanService", () => {
     const updated = await svc.attachDocument(prd.id, docId, revId);
     expect(updated.documentId).toBe(docId);
     expect(updated.sourceRevisionId).toBe(revId);
+  });
+
+  it("(g) getView — nests tethered issues + sub-issues, flags uncovered clauses, lists drift", async () => {
+    await seedCompanyAndProject();
+
+    // PRD document root
+    const root = await svc.create({
+      companyId,
+      projectId,
+      parentId: null,
+      tier: "prd",
+      title: "PRD document root",
+    });
+
+    // Clause 1 — covered: spec → plan → issue (+ sub-issue)
+    const clause1 = await svc.create({
+      companyId,
+      projectId,
+      parentId: root.id,
+      tier: "prd",
+      title: "Clause 1 — covered",
+    });
+    const spec1 = await svc.create({
+      companyId,
+      projectId,
+      parentId: clause1.id,
+      tier: "spec",
+      title: "Spec for clause 1",
+    });
+    const plan1 = await svc.create({
+      companyId,
+      projectId,
+      parentId: spec1.id,
+      tier: "plan",
+      title: "Plan for clause 1",
+    });
+    await svc.setRollupPercent(plan1.id, 60);
+
+    // Clause 2 — uncovered: no spec/plan children
+    const clause2 = await svc.create({
+      companyId,
+      projectId,
+      parentId: root.id,
+      tier: "prd",
+      title: "Clause 2 — uncovered",
+    });
+
+    // Tethered issue on plan1 + its sub-issue
+    const tetheredId = randomUUID();
+    await db.insert(issues).values({
+      id: tetheredId,
+      companyId,
+      projectId,
+      grandPlanNodeId: plan1.id,
+      title: "Tethered issue",
+      status: "in_progress",
+      identifier: "T-1",
+    });
+    const subIssueId = randomUUID();
+    await db.insert(issues).values({
+      id: subIssueId,
+      companyId,
+      projectId,
+      parentId: tetheredId,
+      grandPlanNodeId: plan1.id,
+      title: "Sub-issue",
+      status: "done",
+      identifier: "T-1.1",
+    });
+
+    // Drift issue — no grandPlanNodeId at all
+    const driftId = randomUUID();
+    await db.insert(issues).values({
+      id: driftId,
+      companyId,
+      title: "Orphan drift issue",
+      status: "todo",
+      identifier: "D-1",
+    });
+
+    const view = await svc.getView(companyId, projectId);
+    expect(view.tree).not.toBeNull();
+    expect(view.tree!.id).toBe(root.id);
+
+    const viewClause1 = view.tree!.children.find((c) => c.id === clause1.id)!;
+    const viewClause2 = view.tree!.children.find((c) => c.id === clause2.id)!;
+    expect(viewClause1).toBeTruthy();
+    expect(viewClause2).toBeTruthy();
+
+    // covered clause is not flagged uncovered; uncovered clause is
+    expect(viewClause1.uncovered).toBe(false);
+    expect(viewClause2.uncovered).toBe(true);
+
+    // tethered issue lives on the plan node and carries its sub-issue nested
+    const viewPlan = viewClause1.children[0]!.children[0]!;
+    expect(viewPlan.tier).toBe("plan");
+    expect(viewPlan.rollupPercent).toBe(60);
+    expect(viewPlan.issues).toHaveLength(1);
+    expect(viewPlan.issues[0]!.id).toBe(tetheredId);
+    expect(viewPlan.issues[0]!.children).toHaveLength(1);
+    expect(viewPlan.issues[0]!.children[0]!.id).toBe(subIssueId);
+
+    // the sub-issue is NOT separately listed as a top-level tethered issue
+    const allTopLevelIds = viewPlan.issues.map((i) => i.id);
+    expect(allTopLevelIds).not.toContain(subIssueId);
+
+    // drift list contains the orphan and nothing tethered
+    const driftIds = view.driftIssues.map((i) => i.id);
+    expect(driftIds).toContain(driftId);
+    expect(driftIds).not.toContain(tetheredId);
+    expect(driftIds).not.toContain(subIssueId);
+  });
+
+  it("(h) getView — returns null tree + drift list when no grand plan exists", async () => {
+    await seedCompanyAndProject();
+
+    const driftId = randomUUID();
+    await db.insert(issues).values({
+      id: driftId,
+      companyId,
+      title: "Issue with no plan at all",
+      status: "todo",
+      identifier: "D-2",
+    });
+
+    const view = await svc.getView(companyId, projectId);
+    expect(view.tree).toBeNull();
+    expect(view.driftIssues.map((i) => i.id)).toContain(driftId);
   });
 });

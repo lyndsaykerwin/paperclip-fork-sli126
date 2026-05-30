@@ -14,6 +14,13 @@ export function grandPlanRoutes(db: Db) {
     res.json(tree);
   });
 
+  router.get("/companies/:companyId/grand-plan/view", async (req, res) => {
+    const companyId = req.params.companyId as string;
+    assertCompanyAccess(req, companyId);
+    const view = await svc.getView(companyId, null);
+    res.json(view);
+  });
+
   router.get("/companies/:companyId/grand-plan/root", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);

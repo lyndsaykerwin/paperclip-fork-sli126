@@ -1,15 +1,29 @@
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { grandPlanNodes } from "@paperclipai/db";
+import { grandPlanNodes, issues } from "@paperclipai/db";
 import type {
   GrandPlanNode,
   GrandPlanReconcileState,
   GrandPlanTier,
   GrandPlanTreeNode,
+  GrandPlanView,
+  GrandPlanViewIssue,
+  GrandPlanViewNode,
 } from "@paperclipai/shared";
 import { unprocessable } from "../errors.js";
 
 type GrandPlanNodeRow = typeof grandPlanNodes.$inferSelect;
+type IssueRow = typeof issues.$inferSelect;
+
+function rowToViewIssue(row: IssueRow): GrandPlanViewIssue {
+  return {
+    id: row.id,
+    identifier: row.identifier ?? null,
+    title: row.title,
+    status: row.status,
+    children: [],
+  };
+}
 
 function rowToNode(row: GrandPlanNodeRow): GrandPlanNode {
   return {
@@ -233,6 +247,164 @@ export function grandPlanService(db: Db) {
       }
 
       return buildTree(rootRow);
+    },
+
+    /**
+     * Assemble the read-only Grand Plan VIEW for a company+project:
+     *   - the PRD document-root subtree (clause → spec → plan), each node
+     *     carrying its tethered issues (with nested sub-issues) and an
+     *     `uncovered` flag,
+     *   - a flat `driftIssues` list for issues that cannot trace to a PRD clause.
+     *
+     * Definitions:
+     *   - "tethered" issue = an issue whose `grandPlanNodeId` equals a node id.
+     *     Tethered issues are attached to that exact node. A tethered issue's
+     *     sub-issues (issues whose `parentId` points at it) nest under it rather
+     *     than appearing again at the node level.
+     *   - "uncovered" = a PRD-clause node (tier "prd", parented to the doc root)
+     *     with no spec/plan descendants — i.e. no coverage yet.
+     *   - "drift" = an issue that is NOT a sub-issue of a tethered issue AND
+     *     either has a null `grandPlanNodeId`, or its node's lineage (walking
+     *     `parentId` up the node tree) never reaches a tier "prd" node.
+     */
+    getView: async (
+      companyId: string,
+      projectId: string | null | undefined,
+    ): Promise<GrandPlanView> => {
+      const projectCondition =
+        projectId == null
+          ? isNull(grandPlanNodes.projectId)
+          : eq(grandPlanNodes.projectId, projectId);
+
+      // --- Load all nodes for this company+project ---
+      const nodeRows = await db
+        .select()
+        .from(grandPlanNodes)
+        .where(and(eq(grandPlanNodes.companyId, companyId), projectCondition));
+
+      const nodeById = new Map<string, GrandPlanNodeRow>();
+      for (const row of nodeRows) nodeById.set(row.id, row);
+
+      // Node id -> set of true when its lineage reaches a tier "prd" node.
+      const nodeTracesToPrd = (nodeId: string | null): boolean => {
+        let currentId: string | null = nodeId;
+        const seen = new Set<string>();
+        while (currentId != null && !seen.has(currentId)) {
+          seen.add(currentId);
+          const node = nodeById.get(currentId);
+          if (!node) return false;
+          if (node.tier === "prd") return true;
+          currentId = node.parentId ?? null;
+        }
+        return false;
+      };
+
+      // --- Load ALL company issues (drift must consider issues that don't tether
+      // to ANY node for this company, regardless of project). ---
+      const issueRows = await db
+        .select()
+        .from(issues)
+        .where(eq(issues.companyId, companyId));
+
+      // Build parentIssueId -> children map for sub-issue nesting.
+      const childIssuesByParent = new Map<string, IssueRow[]>();
+      for (const row of issueRows) {
+        if (row.parentId != null) {
+          const list = childIssuesByParent.get(row.parentId) ?? [];
+          list.push(row);
+          childIssuesByParent.set(row.parentId, list);
+        }
+      }
+
+      // Recursively assemble an issue + its sub-issues. `claimed` records every
+      // issue id placed somewhere in the tree so it is not double-listed.
+      const claimed = new Set<string>();
+      function buildIssue(row: IssueRow): GrandPlanViewIssue {
+        claimed.add(row.id);
+        const kids = childIssuesByParent.get(row.id) ?? [];
+        return {
+          ...rowToViewIssue(row),
+          children: kids.map(buildIssue),
+        };
+      }
+
+      // Tethered issues grouped by node id. Only top-level tethered issues
+      // (those that are not themselves a sub-issue of another tethered issue)
+      // are attached at the node; their sub-issues nest beneath them.
+      const tetheredTopLevelByNode = new Map<string, IssueRow[]>();
+      for (const row of issueRows) {
+        if (row.grandPlanNodeId == null) continue;
+        // Skip sub-issues whose parent is also tethered to a node — they nest
+        // under their parent instead of attaching directly to the node.
+        const parent = row.parentId != null ? issueRows.find((r) => r.id === row.parentId) : null;
+        if (parent && parent.grandPlanNodeId != null) continue;
+        const list = tetheredTopLevelByNode.get(row.grandPlanNodeId) ?? [];
+        list.push(row);
+        tetheredTopLevelByNode.set(row.grandPlanNodeId, list);
+      }
+
+      // --- Build node->children map and assemble the view tree ---
+      const childNodesByParent = new Map<string, GrandPlanNodeRow[]>();
+      for (const row of nodeRows) {
+        if (row.parentId != null) {
+          const list = childNodesByParent.get(row.parentId) ?? [];
+          list.push(row);
+          childNodesByParent.set(row.parentId, list);
+        }
+      }
+
+      const rootRow = nodeRows.find((r) => r.parentId == null && r.tier === "prd") ?? null;
+
+      // A PRD-clause node is "uncovered" when none of its descendants is a
+      // spec or plan node.
+      const hasSpecOrPlanDescendant = (nodeId: string): boolean => {
+        const queue = [...(childNodesByParent.get(nodeId) ?? [])];
+        while (queue.length > 0) {
+          const node = queue.shift()!;
+          if (node.tier === "spec" || node.tier === "plan") return true;
+          queue.push(...(childNodesByParent.get(node.id) ?? []));
+        }
+        return false;
+      };
+
+      function buildViewNode(row: GrandPlanNodeRow, isDocRoot: boolean): GrandPlanViewNode {
+        const childRows = childNodesByParent.get(row.id) ?? [];
+        const tethered = tetheredTopLevelByNode.get(row.id) ?? [];
+        // A PRD-clause node is a non-root prd-tier node. The document root
+        // itself is never flagged uncovered.
+        const isClause = row.tier === "prd" && !isDocRoot;
+        const uncovered = isClause && !hasSpecOrPlanDescendant(row.id);
+        return {
+          ...rowToNode(row),
+          children: childRows.map((c) => buildViewNode(c, false)),
+          issues: tethered.map(buildIssue),
+          uncovered,
+        };
+      }
+
+      const tree = rootRow ? buildViewNode(rootRow, true) : null;
+
+      // --- Drift list: issues not claimed into the tree that cannot trace to a
+      // PRD clause. A null grandPlanNodeId is always drift; a tethered issue is
+      // drift only if its node lineage never reaches a tier "prd" node. ---
+      const driftIssues: GrandPlanViewIssue[] = [];
+      for (const row of issueRows) {
+        if (claimed.has(row.id)) continue;
+        // Sub-issues are surfaced under their parent (drift or tethered); only
+        // consider issues that are not themselves nested under a parent issue
+        // we will render, to avoid duplicates. Top-level = no parent, or parent
+        // is not a company issue we loaded.
+        const hasRenderedParent =
+          row.parentId != null && issueRows.some((r) => r.id === row.parentId);
+        if (hasRenderedParent) continue;
+
+        const traces = row.grandPlanNodeId != null && nodeTracesToPrd(row.grandPlanNodeId);
+        if (!traces) {
+          driftIssues.push(buildIssue(row));
+        }
+      }
+
+      return { tree, driftIssues };
     },
 
     /**

@@ -682,6 +682,9 @@ export type {
   GrandPlanReconcileState,
   GrandPlanNode,
   GrandPlanTreeNode,
+  GrandPlanViewIssue,
+  GrandPlanViewNode,
+  GrandPlanView,
 } from "./types/index.js";
 export { COMPANY_SEARCH_SCOPES } from "./types/index.js";
 export {

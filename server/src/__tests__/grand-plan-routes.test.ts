@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mockGrandPlanService = vi.hoisted(() => ({
   getTree: vi.fn(),
   getRoot: vi.fn(),
+  getView: vi.fn(),
   create: vi.fn(),
   getById: vi.fn(),
   getAncestors: vi.fn(),
@@ -163,6 +164,59 @@ describe("grand plan routes", () => {
 
       expect(res.status).toBe(401);
       expect(mockGrandPlanService.getRoot).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("GET /api/companies/:companyId/grand-plan/view", () => {
+    const VIEW = {
+      tree: { ...TREE_NODE, issues: [], uncovered: false },
+      driftIssues: [
+        { id: "iss-1", identifier: "D-1", title: "Orphan", status: "todo", children: [] },
+      ],
+    };
+
+    it("returns the view payload for a company that has one", async () => {
+      mockGrandPlanService.getView.mockResolvedValue(VIEW);
+
+      const app = await createApp(BOARD_ACTOR);
+      const res = await request(app).get("/api/companies/company-1/grand-plan/view");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(VIEW);
+      expect(mockGrandPlanService.getView).toHaveBeenCalledWith("company-1", null);
+    });
+
+    it("returns null tree + drift list when no grand plan exists", async () => {
+      mockGrandPlanService.getView.mockResolvedValue({ tree: null, driftIssues: [] });
+
+      const app = await createApp(BOARD_ACTOR);
+      const res = await request(app).get("/api/companies/company-1/grand-plan/view");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ tree: null, driftIssues: [] });
+    });
+
+    it("returns 403 when the board user lacks company access", async () => {
+      const app = await createApp({
+        type: "board",
+        userId: "user-2",
+        source: "session",
+        isInstanceAdmin: false,
+        companyIds: ["company-2"],
+      });
+
+      const res = await request(app).get("/api/companies/company-1/grand-plan/view");
+
+      expect(res.status).toBe(403);
+      expect(mockGrandPlanService.getView).not.toHaveBeenCalled();
+    });
+
+    it("returns 401 for unauthenticated callers", async () => {
+      const app = await createApp({ type: "none", source: "none" });
+      const res = await request(app).get("/api/companies/company-1/grand-plan/view");
+
+      expect(res.status).toBe(401);
+      expect(mockGrandPlanService.getView).not.toHaveBeenCalled();
     });
   });
 });

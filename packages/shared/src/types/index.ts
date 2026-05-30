@@ -470,4 +470,7 @@ export type {
   GrandPlanReconcileState,
   GrandPlanNode,
   GrandPlanTreeNode,
+  GrandPlanViewIssue,
+  GrandPlanViewNode,
+  GrandPlanView,
 } from "./grand-plan.js";
