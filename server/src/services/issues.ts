@@ -81,6 +81,7 @@ import {
   RECOVERY_ORIGIN_KINDS,
 } from "./recovery/origins.js";
 import { classifyIssueGraphLiveness, type IssueLivenessFinding } from "./recovery/issue-graph-liveness.js";
+import { recomputeGrandPlanRollupForNodeAndAncestors } from "./grand-plan-rollup.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -4615,6 +4616,19 @@ export function issueService(db: Db) {
           .returning()
           .then((rows: Array<typeof issues.$inferSelect>) => rows[0] ?? null);
         if (!updated) return null;
+
+        // B3 — live progress rollup. When an issue crosses the `done` boundary
+        // (into or out of `done`) and is tethered to a grand plan node,
+        // recompute that node's rollupPercent and each ancestor's, inside this
+        // same transaction. Inert when the issue has no grandPlanNodeId.
+        const crossedDoneBoundary =
+          issueData.status !== undefined &&
+          existing.status !== issueData.status &&
+          (existing.status === "done" || issueData.status === "done");
+        if (crossedDoneBoundary && updated.grandPlanNodeId != null) {
+          await recomputeGrandPlanRollupForNodeAndAncestors(tx, updated.grandPlanNodeId);
+        }
+
         if (nextLabelIds !== undefined) {
           await syncIssueLabels(updated.id, existing.companyId, nextLabelIds, tx);
         }
