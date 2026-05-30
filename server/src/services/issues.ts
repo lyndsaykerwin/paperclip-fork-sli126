@@ -1642,6 +1642,7 @@ const issueListSelect = {
   completedAt: issues.completedAt,
   cancelledAt: issues.cancelledAt,
   hiddenAt: issues.hiddenAt,
+  grandPlanNodeId: issues.grandPlanNodeId,
   createdAt: issues.createdAt,
   updatedAt: issues.updatedAt,
 };
