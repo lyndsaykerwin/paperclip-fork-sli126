@@ -1945,6 +1945,10 @@ export function issueRoutes(
       includeBlockedBy: req.query.includeBlockedBy === "true" || req.query.includeBlockedBy === "1",
       includeBlockedInboxAttention:
         req.query.includeBlockedInboxAttention === "true" || req.query.includeBlockedInboxAttention === "1",
+      includePendingBoardInteraction:
+        req.query.includePendingBoardInteraction === "true" || req.query.includePendingBoardInteraction === "1",
+      includeLastCommentHint:
+        req.query.includeLastCommentHint === "true" || req.query.includeLastCommentHint === "1",
       q: req.query.q as string | undefined,
       limit,
       offset,

@@ -57,6 +57,8 @@ export const issuesApi = {
       includeRoutineExecutions?: boolean;
       includeBlockedBy?: boolean;
       includeBlockedInboxAttention?: boolean;
+      includePendingBoardInteraction?: boolean;
+      includeLastCommentHint?: boolean;
       q?: string;
       limit?: number;
       offset?: number;
@@ -85,6 +87,8 @@ export const issuesApi = {
     if (filters?.includeRoutineExecutions) params.set("includeRoutineExecutions", "true");
     if (filters?.includeBlockedBy) params.set("includeBlockedBy", "true");
     if (filters?.includeBlockedInboxAttention) params.set("includeBlockedInboxAttention", "true");
+    if (filters?.includePendingBoardInteraction) params.set("includePendingBoardInteraction", "true");
+    if (filters?.includeLastCommentHint) params.set("includeLastCommentHint", "true");
     if (filters?.q) params.set("q", filters.q);
     if (filters?.limit) params.set("limit", String(filters.limit));
     if (filters?.offset !== undefined) params.set("offset", String(filters.offset));

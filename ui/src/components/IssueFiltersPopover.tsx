@@ -145,6 +145,20 @@ export function IssueFiltersPopover({
           <div className="space-y-1.5">
             <span className="text-xs text-muted-foreground">Quick filters</span>
             <div className="flex flex-wrap gap-1.5">
+              {currentUserId ? (
+                <button
+                  type="button"
+                  className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                    state.waitingOnMe
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border text-muted-foreground hover:border-foreground/30 hover:text-foreground"
+                  }`}
+                  onClick={() => onChange({ waitingOnMe: !state.waitingOnMe })}
+                  title="Issues directly assigned to you or paused on a question/confirmation waiting on your input"
+                >
+                  Waiting on you
+                </button>
+              ) : null}
               {issueQuickFilterPresets.map((preset) => {
                 const isActive = issueFilterArraysEqual(state.statuses, preset.statuses);
                 return (

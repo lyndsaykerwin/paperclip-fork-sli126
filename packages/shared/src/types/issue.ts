@@ -230,6 +230,19 @@ export interface IssueBlockedInboxAttention {
   };
 }
 
+export interface IssuePendingBoardInteractionSummary {
+  id: string;
+  kind: IssueThreadInteractionKind;
+  createdAt: Date | string;
+}
+
+export interface IssueLastCommentHint {
+  body: string;
+  authorKind: "agent" | "user";
+  authorAgentId?: string | null;
+  createdAt: Date | string;
+}
+
 export type IssueProductivityReviewTrigger =
   | "no_comment_streak"
   | "long_active_duration"
@@ -478,6 +491,8 @@ export interface Issue {
   blocks?: IssueRelationIssueSummary[];
   blockerAttention?: IssueBlockerAttention;
   blockedInboxAttention?: IssueBlockedInboxAttention | null;
+  pendingBoardInteraction?: IssuePendingBoardInteractionSummary | null;
+  lastCommentHint?: IssueLastCommentHint | null;
   productivityReview?: IssueProductivityReview | null;
   activeRecoveryAction?: IssueRecoveryAction | null;
   successfulRunHandoff?: SuccessfulRunHandoffState | null;

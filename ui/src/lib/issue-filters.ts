@@ -20,6 +20,7 @@ export type IssueFilterState = {
   workspaces: string[];
   liveOnly?: boolean;
   hideRoutineExecutions: boolean;
+  waitingOnMe: boolean;
 };
 
 export const defaultIssueFilterState: IssueFilterState = {
@@ -32,6 +33,7 @@ export const defaultIssueFilterState: IssueFilterState = {
   workspaces: [],
   liveOnly: false,
   hideRoutineExecutions: false,
+  waitingOnMe: false,
 };
 
 export const issueStatusOrder = ["in_progress", "todo", "backlog", "in_review", "blocked", "done", "cancelled"];
@@ -73,6 +75,7 @@ export function normalizeIssueFilterState(value: unknown): IssueFilterState {
     workspaces: normalizeIssueFilterValueArray(candidate.workspaces),
     liveOnly: candidate.liveOnly === true,
     hideRoutineExecutions: candidate.hideRoutineExecutions === true,
+    waitingOnMe: candidate.waitingOnMe === true,
   };
 }
 
@@ -118,6 +121,33 @@ export function shouldIncludeIssueFilterWorkspaceOption(
     && defaultProjectWorkspaceIds.has(workspace.projectWorkspaceId));
 }
 
+const WAITING_ON_ME_TRIGGER_PHRASES = [
+  "unblock owner",
+  "waiting on",
+  "needs your",
+  "requires your",
+  "only you can",
+  "your decision",
+  "your call",
+];
+const WAITING_ON_ME_PROXIMITY_CHARS = 50;
+const WAITING_ON_ME_STALE_REVIEW_MS = 24 * 60 * 60 * 1000;
+
+function commentMentionsUserNearTrigger(body: string, userTokens: string[]): boolean {
+  const lower = body.toLowerCase();
+  for (const phrase of WAITING_ON_ME_TRIGGER_PHRASES) {
+    const phraseIdx = lower.indexOf(phrase);
+    if (phraseIdx === -1) continue;
+    const start = Math.max(0, phraseIdx - WAITING_ON_ME_PROXIMITY_CHARS);
+    const end = Math.min(lower.length, phraseIdx + phrase.length + WAITING_ON_ME_PROXIMITY_CHARS);
+    const window = lower.slice(start, end);
+    for (const token of userTokens) {
+      if (window.includes(token)) return true;
+    }
+  }
+  return false;
+}
+
 export function applyIssueFilters(
   issues: Issue[],
   state: IssueFilterState,
@@ -125,6 +155,7 @@ export function applyIssueFilters(
   enableRoutineVisibilityFilter = false,
   liveIssueIds?: ReadonlySet<string>,
   workspaceContext: IssueFilterWorkspaceContext = {},
+  currentUserLogin?: string | null,
 ): Issue[] {
   let result = issues;
   if (state.liveOnly) {
@@ -132,6 +163,39 @@ export function applyIssueFilters(
   }
   if (enableRoutineVisibilityFilter && state.hideRoutineExecutions) {
     result = result.filter((issue) => issue.originKind !== "routine_execution");
+  }
+  if (state.waitingOnMe) {
+    const rawUserTokens = [
+      currentUserId,
+      currentUserLogin,
+      ...(currentUserLogin ? currentUserLogin.split(/\s+/) : []),
+    ];
+    const userTokens = [...new Set(
+      rawUserTokens
+        .filter((t): t is string => t != null && t.length > 1)
+        .map((t) => t.toLowerCase()),
+    )];
+    const now = Date.now();
+    result = result.filter((issue) => {
+      // Rule 1: directly assigned to you
+      if (currentUserId && issue.assigneeUserId === currentUserId) return true;
+      // Rule 2: pending board interaction (agent parked a question/confirmation)
+      if (issue.pendingBoardInteraction != null) return true;
+      // Rule 3: blocked + last comment names you near a trigger phrase
+      if (issue.status === "blocked" && issue.lastCommentHint && userTokens.length > 0) {
+        if (commentMentionsUserNearTrigger(issue.lastCommentHint.body, userTokens)) return true;
+      }
+      // Rule 4: in_review, last comment is from the assignee agent (no one else picked it up), older than 24h
+      if (
+        issue.status === "in_review"
+        && issue.lastCommentHint
+        && issue.lastCommentHint.authorKind === "agent"
+        && issue.assigneeAgentId != null
+        && issue.lastCommentHint.authorAgentId === issue.assigneeAgentId
+        && now - new Date(issue.lastCommentHint.createdAt).getTime() > WAITING_ON_ME_STALE_REVIEW_MS
+      ) return true;
+      return false;
+    });
   }
   if (state.statuses.length > 0) result = result.filter((issue) => state.statuses.includes(issue.status));
   if (state.priorities.length > 0) result = result.filter((issue) => state.priorities.includes(issue.priority));
@@ -183,5 +247,6 @@ export function countActiveIssueFilters(
   if (state.workspaces.length > 0) count += 1;
   if (state.liveOnly) count += 1;
   if (enableRoutineVisibilityFilter && state.hideRoutineExecutions) count += 1;
+  if (state.waitingOnMe) count += 1;
   return count;
 }
