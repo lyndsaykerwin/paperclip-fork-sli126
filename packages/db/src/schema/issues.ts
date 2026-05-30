@@ -13,6 +13,7 @@ import {
 import { agents } from "./agents.js";
 import { projects } from "./projects.js";
 import { goals } from "./goals.js";
+import { grandPlanNodes } from "./grand_plan_nodes.js";
 import { companies } from "./companies.js";
 import { heartbeatRuns } from "./heartbeat_runs.js";
 import { projectWorkspaces } from "./project_workspaces.js";
@@ -26,6 +27,7 @@ export const issues = pgTable(
     projectId: uuid("project_id").references(() => projects.id),
     projectWorkspaceId: uuid("project_workspace_id").references(() => projectWorkspaces.id, { onDelete: "set null" }),
     goalId: uuid("goal_id").references(() => goals.id),
+    grandPlanNodeId: uuid("grand_plan_node_id").references((): AnyPgColumn => grandPlanNodes.id, { onDelete: "set null" }),
     parentId: uuid("parent_id").references((): AnyPgColumn => issues.id),
     title: text("title").notNull(),
     description: text("description"),
