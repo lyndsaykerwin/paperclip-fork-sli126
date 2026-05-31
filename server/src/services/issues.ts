@@ -84,6 +84,7 @@ import { classifyIssueGraphLiveness, type IssueLivenessFinding } from "./recover
 import { recomputeGrandPlanRollupForNodeAndAncestors } from "./grand-plan-rollup.js";
 import { grandPlanService } from "./grand-plan.js";
 import { approvalService } from "./approvals.js";
+import { findCompanyCeoAgentId } from "./company-ceo.js";
 
 const ALL_ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"];
 const MAX_ISSUE_COMMENT_PAGE_LIMIT = 500;
@@ -2915,17 +2916,12 @@ export function issueService(db: Db, deps: IssueServiceDeps = {}) {
         });
       }
 
-      // Wake the company CEO (role='ceo') so the routing request gets attention,
-      // exactly like assignment wakeups do for assignees.
+      // Wake the company CEO so the routing request gets attention, exactly
+      // like assignment wakeups do for assignees.
       if (deps.heartbeat) {
-        const ceo = await db
-          .select({ id: agents.id })
-          .from(agents)
-          .where(and(eq(agents.companyId, companyId), eq(agents.role, "ceo")))
-          .limit(1)
-          .then((rows) => rows[0] ?? null);
-        if (ceo) {
-          await deps.heartbeat.wakeup(ceo.id, {
+        const ceoId = await findCompanyCeoAgentId(db, companyId);
+        if (ceoId) {
+          await deps.heartbeat.wakeup(ceoId, {
             source: "automation",
             triggerDetail: "system",
             reason: "grand_plan_tether",

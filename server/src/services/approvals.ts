@@ -1,12 +1,13 @@
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "@paperclipai/db";
-import { agents, approvalComments, approvals, grandPlanNodes } from "@paperclipai/db";
+import { approvalComments, approvals, grandPlanNodes } from "@paperclipai/db";
 import { notFound, unprocessable } from "../errors.js";
 import { logger } from "../middleware/logger.js";
 import { redactCurrentUserText } from "../log-redaction.js";
 import { agentService } from "./agents.js";
 import { budgetService } from "./budgets.js";
 import { grandPlanService } from "./grand-plan.js";
+import { findCompanyCeoAgentId } from "./company-ceo.js";
 import { notifyHireApproved } from "./hire-hook.js";
 import { instanceSettingsService } from "./instance-settings.js";
 
@@ -175,14 +176,9 @@ export function approvalService(db: Db, deps: ApprovalServiceDeps = {}) {
 
       // Wake the CEO to author the ripple work.
       if (deps.heartbeat) {
-        const ceo = await db
-          .select({ id: agents.id })
-          .from(agents)
-          .where(and(eq(agents.companyId, root.companyId), eq(agents.role, "ceo")))
-          .limit(1)
-          .then((rows) => rows[0] ?? null);
-        if (ceo) {
-          await deps.heartbeat.wakeup(ceo.id, {
+        const ceoId = await findCompanyCeoAgentId(db, root.companyId);
+        if (ceoId) {
+          await deps.heartbeat.wakeup(ceoId, {
             source: "automation",
             triggerDetail: "system",
             reason: "grand_plan_reconcile",
